@@ -62,6 +62,11 @@ const buildLocalDynamicCareers = (normalizedScores) => {
     const suggestion = leadSkill
       ? `Prioritize ${leadSkill} first to improve your ${role.name} fit.`
       : `You are aligned for ${role.name}; focus on advanced projects and interview prep.`;
+    const learningPath = [
+      leadSkill ? `Strengthen ${leadSkill} with guided practice.` : `Advance your core ${role.name} skill set.`,
+      `Build one mini project using ${required.slice(0, 2).join(' and ')}.`,
+      `Create a portfolio-ready ${role.name} case study and apply for internships/junior roles.`,
+    ];
 
     return {
       id: `local-${role.id}`,
@@ -76,6 +81,7 @@ const buildLocalDynamicCareers = (normalizedScores) => {
       matchedSkills,
       missingSkills,
       suggestion,
+      learningPath,
       detailsAvailable: false,
       _order: index,
     };
@@ -94,6 +100,8 @@ const Results = () => {
   const [simulationResult, setSimulationResult] = useState(null);
   const [simulating, setSimulating] = useState(false);
   const [simulationError, setSimulationError] = useState('');
+  const [openSuggestionCard, setOpenSuggestionCard] = useState(null);
+  const [expandedFutureScopeCards, setExpandedFutureScopeCards] = useState({});
   const [generatedCareers, setGeneratedCareers] = useState([]);
   const [careersLoading, setCareersLoading] = useState(false);
   const [careersError, setCareersError] = useState('');
@@ -208,6 +216,24 @@ const Results = () => {
                 || career.career_goal
                 || 'Recommended based on your quiz profile';
 
+              const recommendationPath = [
+                ...(Array.isArray(career.llm_output?.tech_recommendations) ? career.llm_output.tech_recommendations : []),
+                ...(Array.isArray(career.llm_output?.tools)
+                  ? career.llm_output.tools.map((tool) => `Use ${tool} in projects`)
+                  : []),
+              ];
+              const uniquePath = Array.from(new Set(
+                recommendationPath
+                  .map((item) => String(item || '').trim())
+                  .filter(Boolean)
+              ));
+
+              const fallbackPath = [
+                ...(missingSkills.length ? [`Improve ${missingSkills[0]} through focused exercises.`] : []),
+                ...(requiredSkills.length ? [`Build a project covering ${requiredSkills.slice(0, 2).join(' and ')}.`] : []),
+                'Publish your work and prepare for role-specific interviews.',
+              ];
+
               return {
                 id: `generated-${index + 1}`,
                 name: career.title || `Career ${index + 1}`,
@@ -224,6 +250,7 @@ const Results = () => {
                   (Array.isArray(career.llm_output?.tech_recommendations) && career.llm_output.tech_recommendations.join(' '))
                   || career.suggestion
                   || 'Improve missing skills and build project experience.',
+                learningPath: uniquePath.length > 0 ? uniquePath.slice(0, 5) : fallbackPath,
                 detailsAvailable: false,
               };
             })
@@ -370,29 +397,6 @@ const Results = () => {
 
   return (
     <div className="space-y-12">
-      {/* DEBUG: API-to-UI Trace */}
-      <section className="card-surface p-4 bg-red-50 border-2 border-red-400 rounded-lg">
-        <p className="text-xs font-bold text-red-900 mb-2">🔴 DEBUG - DIAGNOSTIC INFO:</p>
-        <p className="text-xs text-red-800 font-mono mb-1">
-          Quiz Scores: {Object.entries(currentScores).map(([k, v]) => `${k}=${Math.round(v)}%`).join(' | ') || 'NONE'}
-        </p>
-        <p className="text-xs text-red-800 font-mono mb-1">
-          Normalized (0-10): {Object.entries(normalizedCurrentScores).map(([k, v]) => `${k}=${v}`).join(' | ') || 'NONE'}
-        </p>
-        <p className="text-xs text-red-800 font-mono mb-1">
-          Top Careers: {topCareers.length > 0 ? topCareers.slice(0, 3).map(c => `${c.name}(${c.match}%)`).join(' → ') : 'NO CAREERS'}
-        </p>
-        <p className="text-xs text-red-800 font-mono mb-1">
-          Missing Skills Count: {topCareers.slice(0, 3).reduce((sum, c) => sum + (c.missingSkills?.length || 0), 0)}
-        </p>
-        <p className="text-xs text-red-800 font-mono mb-1">
-          Priority Gaps Found: {commonMissingSkills.length > 0 ? commonMissingSkills.join(' → ') : '❌ EMPTY'}
-        </p>
-        <p className="text-xs text-red-800 font-mono">
-          Source: {careersSource} | Loading: {careersLoading ? '⏳' : '✓'}
-        </p>
-      </section>
-
       {/* Summary Card */}
       <section className="card-surface p-8 bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200">
         <div className="flex items-start justify-between">
@@ -491,7 +495,11 @@ const Results = () => {
         </div>
 
         <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-          {topCareers.map((career) => (
+          {topCareers.map((career) => {
+            const futureScopeText = career.futureScope || 'Good scope with continuous upskilling.';
+            const isFutureScopeExpanded = Boolean(expandedFutureScopeCards[career.id]);
+
+            return (
             <div
               key={career.id}
               className="bg-white rounded-xl shadow-md hover:shadow-lg hover:scale-105 transition-transform duration-300 border border-gray-200 p-6 cursor-pointer"
@@ -505,37 +513,68 @@ const Results = () => {
               <h3 className="text-lg font-bold text-blue-700">{career.name}</h3>
               <p className="text-sm text-gray-600 mt-2">{career.description}</p>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <div className="rounded-md bg-amber-50 border border-amber-200 p-2">
-                  <p className="text-[10px] font-semibold text-amber-700">DOMAIN GAP</p>
-                  <p className="text-xs font-bold text-amber-700">
-                    {Number.isFinite(Number(career.domainGap))
-                      ? Math.round(Number(career.domainGap))
-                      : Math.max(0, 100 - (career.match || 0))}%
-                  </p>
-                </div>
-                <div className="rounded-md bg-red-50 border border-red-200 p-2">
-                  <p className="text-[10px] font-semibold text-red-700">TECH GAP</p>
-                  <p className="text-xs font-bold text-red-700">
-                    {Number.isFinite(Number(career.techGap))
-                      ? Math.round(Number(career.techGap))
-                      : career.requiredSkills?.length
-                        ? Math.round(((career.missingSkills?.length || 0) / career.requiredSkills.length) * 100)
-                        : Math.max(0, 100 - (career.match || 0))}%
-                  </p>
-                </div>
-              </div>
-
               <div className="mt-3 rounded-md bg-green-50 border border-green-200 p-3">
                 <p className="text-[10px] font-semibold text-green-700">FUTURE SCOPE</p>
-                <p className="text-xs text-green-700 mt-1">{career.futureScope || 'Good scope with continuous upskilling.'}</p>
+                <p
+                  className="text-xs text-green-700 mt-1"
+                  style={!isFutureScopeExpanded ? {
+                    display: '-webkit-box',
+                    WebkitLineClamp: 4,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  } : undefined}
+                >
+                  {futureScopeText}
+                </p>
+                <button
+                  type="button"
+                  className="mt-2 text-[11px] font-semibold text-green-800 hover:underline"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setExpandedFutureScopeCards((current) => ({
+                      ...current,
+                      [career.id]: !Boolean(current[career.id]),
+                    }));
+                  }}
+                >
+                  {isFutureScopeExpanded ? 'Show less' : 'Read more'}
+                </button>
               </div>
 
-              <button className="mt-4 w-full py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm font-semibold text-gray-700 transition">
-                {career.detailsAvailable === false ? 'AI Suggestion' : 'View Details →'}
+              {openSuggestionCard === career.id && (
+                <div className="mt-3 rounded-md bg-blue-50 border border-blue-200 p-3">
+                  <p className="text-[10px] font-semibold text-blue-700">AI SUGGESTION</p>
+                  <p className="text-xs text-blue-800 mt-1">{career.suggestion || 'Focus on high-impact skills and consistent project work.'}</p>
+
+                  <p className="text-[10px] font-semibold text-blue-700 mt-3">PATH REQUIRED</p>
+                  <ol className="mt-1 space-y-1 list-decimal list-inside">
+                    {(career.learningPath && career.learningPath.length > 0
+                      ? career.learningPath
+                      : [
+                          'Strengthen your weak skills with practical learning.',
+                          'Build targeted projects that match role requirements.',
+                          'Showcase your portfolio and apply consistently.',
+                        ]).map((step, index) => (
+                      <li key={`${career.id}-path-${index}`} className="text-xs text-blue-800">{step}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setOpenSuggestionCard((current) => (current === career.id ? null : career.id));
+                }}
+                className="mt-4 w-full py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm font-semibold text-gray-700 transition"
+              >
+                {career.detailsAvailable === false
+                  ? (openSuggestionCard === career.id ? 'Hide AI Suggestion' : 'AI Suggestion')
+                  : 'View Details →'}
               </button>
             </div>
-          ))}
+          );})}
         </div>
       </section>
 

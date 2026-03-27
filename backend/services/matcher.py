@@ -1,5 +1,7 @@
 import json
 import os
+import re
+from difflib import SequenceMatcher
 from services.career_analysis import CAREERS_BY_DOMAIN, _calculate_metrics, _get_careers_for_domain, _normalize_input_skills
 
 # Load careers data from JSON file
@@ -12,6 +14,31 @@ def _load_careers():
         return []
 
 CAREERS_DB = _load_careers()
+
+
+def _tokenize_skill_label(label):
+    return {
+        token
+        for token in re.split(r'[^a-z0-9]+', str(label).strip().lower())
+        if token
+    }
+
+
+def _skill_similarity(left, right):
+    left_str = str(left).strip().lower()
+    right_str = str(right).strip().lower()
+    if not left_str or not right_str:
+        return 0.0
+
+    left_tokens = _tokenize_skill_label(left_str)
+    right_tokens = _tokenize_skill_label(right_str)
+
+    token_overlap = 0.0
+    if left_tokens and right_tokens:
+        token_overlap = len(left_tokens & right_tokens) / max(len(left_tokens), len(right_tokens))
+
+    text_similarity = SequenceMatcher(None, left_str, right_str).ratio()
+    return max(token_overlap, text_similarity * 0.6)
 
 def find_matching_careers(skills, interests, assessment):
     """
@@ -217,12 +244,14 @@ def simulate_skill_improvement(selected_skill, current_scores, interests=None, i
         if first_interest:
             domain_value = first_interest
 
-    def _score_careers(careers_map):
+    def _score_careers(careers_map, old_skill_profile=None, new_skill_profile=None):
+        old_profile = old_skill_profile if isinstance(old_skill_profile, dict) else expanded_old
+        new_profile = new_skill_profile if isinstance(new_skill_profile, dict) else expanded_new
         old_local = []
         new_local = []
         for role_name, required_skills in careers_map.items():
-            old_metrics = _calculate_metrics(expanded_old, required_skills)
-            new_metrics = _calculate_metrics(expanded_new, required_skills)
+            old_metrics = _calculate_metrics(old_profile, required_skills)
+            new_metrics = _calculate_metrics(new_profile, required_skills)
 
             role_id = role_name.lower().replace(' ', '-').replace('/', '-')
             old_local.append({'id': role_id, 'name': role_name, 'score': old_metrics['match']})
@@ -244,6 +273,65 @@ def simulate_skill_improvement(selected_skill, current_scores, interests=None, i
             if isinstance(careers_map, dict):
                 all_careers.update(careers_map)
         old_scores, new_scores = _score_careers(all_careers)
+
+    # If simulation is still flat, infer required-skill scores from the user's
+    # provided skill profile with fuzzy transfer to keep outcomes role-specific.
+    global_max_new = max((item['score'] for item in new_scores), default=0)
+    if global_max_new <= 0:
+        all_careers = {}
+        for careers_map in CAREERS_BY_DOMAIN.values():
+            if isinstance(careers_map, dict):
+                all_careers.update(careers_map)
+
+        fallback_careers = domain_careers if domain_careers else all_careers
+
+        all_required_skills = {
+            skill
+            for required_list in fallback_careers.values()
+            for skill in required_list
+        }
+
+        required_frequency = {}
+        for required_list in fallback_careers.values():
+            for skill in required_list:
+                required_frequency[skill] = required_frequency.get(skill, 0) + 1
+        max_frequency = max(required_frequency.values(), default=1)
+
+        def _build_transferred_profile(base_scores_10):
+            source_items = [
+                (str(skill).strip(), max(0.0, min(10.0, float(score))))
+                for skill, score in base_scores_10.items()
+                if str(skill).strip()
+            ]
+
+            avg_source = (
+                sum(score for _, score in source_items) / len(source_items)
+                if source_items else 0.0
+            )
+
+            inferred_profile = dict(base_scores_10)
+            for required_skill in all_required_skills:
+                current_value = max(0.0, min(10.0, float(inferred_profile.get(required_skill, 0.0))))
+                best_transfer = 0.0
+
+                for source_skill, source_value in source_items:
+                    similarity = _skill_similarity(required_skill, source_skill)
+                    best_transfer = max(best_transfer, source_value * similarity)
+
+                frequency_ratio = required_frequency.get(required_skill, 1) / max_frequency
+                baseline = min(1.6, max(0.15, avg_source * 0.08 + frequency_ratio * 0.25))
+                inferred_value = min(10.0, max(current_value, baseline + (best_transfer * 0.85)))
+                inferred_profile[required_skill] = inferred_value
+
+            return _normalize_input_skills(inferred_profile)
+
+        boosted_old_profile = _build_transferred_profile(old_scores_10)
+        boosted_new_profile = _build_transferred_profile(new_scores_10)
+        old_scores, new_scores = _score_careers(
+            fallback_careers,
+            old_skill_profile=boosted_old_profile,
+            new_skill_profile=boosted_new_profile,
+        )
 
     old_top = old_scores[0]['score'] if old_scores else 0
     new_top = new_scores[0]['score'] if new_scores else 0

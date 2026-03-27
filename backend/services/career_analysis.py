@@ -3,6 +3,7 @@
 import json
 import os
 import random
+import re
 from typing import Any, Dict, List, Tuple
 
 import requests
@@ -102,11 +103,71 @@ CAREERS_BY_DOMAIN = {
     },
 }
 
+DOMAIN_ALIASES: Dict[str, List[str]] = {
+    "Cybersecurity & Cloud": [
+        "cybersecurity and cloud",
+        "cyber security and cloud",
+        "cybersecurity cloud",
+        "cloud and security",
+        "cloud security",
+    ],
+    "Web & Mobile Development": [
+        "web and mobile development",
+        "web mobile development",
+        "web development",
+        "mobile development",
+        "full stack",
+        "frontend and backend",
+    ],
+    "Data Science & Analytics": [
+        "data science and analytics",
+        "data science",
+        "analytics",
+        "data analytics",
+    ],
+    "Artificial Intelligence & ML": [
+        "artificial intelligence and ml",
+        "artificial intelligence",
+        "ai and ml",
+        "ai ml",
+        "machine learning",
+    ],
+    "Product & UX": [
+        "product and ux",
+        "product ux",
+        "product design and ux",
+        "ui ux",
+        "ux and product",
+        "product management and ux",
+    ],
+}
+
+
+def _normalize_domain_key(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(value).strip().lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _resolve_domain_name(domain: str) -> str:
+    domain_clean = str(domain).strip() if domain else ""
+    if not domain_clean:
+        return "Web & Mobile Development"
+
+    if domain_clean in CAREERS_BY_DOMAIN:
+        return domain_clean
+
+    normalized_input = _normalize_domain_key(domain_clean)
+    for canonical, aliases in DOMAIN_ALIASES.items():
+        candidates = [canonical, *aliases]
+        if normalized_input in {_normalize_domain_key(item) for item in candidates}:
+            return canonical
+
+    return "Web & Mobile Development"
+
 def _get_careers_for_domain(domain: str) -> Dict[str, List[str]]:
     """Get only careers relevant to the selected domain."""
-    domain_clean = str(domain).strip() if domain else "Web & Mobile Development"
-    # If domain exists in mapping, use it; otherwise fall back to general web dev
-    return CAREERS_BY_DOMAIN.get(domain_clean, CAREERS_BY_DOMAIN["Web & Mobile Development"])
+    resolved_domain = _resolve_domain_name(domain)
+    return CAREERS_BY_DOMAIN.get(resolved_domain, CAREERS_BY_DOMAIN["Web & Mobile Development"])
 
 
 def _normalize_input_skills(skills: Dict[str, Any]) -> Dict[str, float]:
